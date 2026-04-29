@@ -1,0 +1,42 @@
+# Azure Pipelines does not load a checked-in `.env` file. Define the same names as `.env.example`
+# under Pipelines → Edit pipeline → Variables (mark secrets). Use $(VAR_NAME) below to inject them.
+# Current steps only run lint + smoke tests; variables may be empty until you add integration tests.
+
+trigger:
+  - main
+
+pool:
+  vmImage: ubuntu-latest
+
+variables:
+  pythonVersion: "3.13"
+
+steps:
+  - task: UsePythonVersion@0
+    inputs:
+      versionSpec: $(pythonVersion)
+    displayName: Use Python 3.13
+
+  - script: |
+      python -m pip install --upgrade pip
+      pip install -r requirements.txt -r requirements-dev.txt
+    displayName: Install dependencies
+
+  - script: |
+      ruff check .
+    displayName: Ruff (lint)
+
+  - script: |
+      pytest tests/ -q --tb=short
+    displayName: Pytest
+    env:
+      # Optional: set matching pipeline variables in Azure DevOps for DB/Service Bus–backed tests later.
+      DB_SERVER: $(DB_SERVER)
+      DB_DATABASE: $(DB_DATABASE)
+      DB_USERNAME: $(DB_USERNAME)
+      DB_PASSWORD: $(DB_PASSWORD)
+      AZURE_SQL_CONNECTION_STRING: $(AZURE_SQL_CONNECTION_STRING)
+      DB_ODBC_DRIVER: $(DB_ODBC_DRIVER)
+      AZURE_SERVICEBUS_LISTEN_CONNECTION_STRING: $(AZURE_SERVICEBUS_LISTEN_CONNECTION_STRING)
+      AZURE_SERVICEBUS_QUEUE_NAME: $(AZURE_SERVICEBUS_QUEUE_NAME)
+      AZURE_SERVICEBUS_POLL_INTERVAL_SECONDS: $(AZURE_SERVICEBUS_POLL_INTERVAL_SECONDS)

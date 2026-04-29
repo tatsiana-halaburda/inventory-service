@@ -17,11 +17,18 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
+    logger.info("Inventory service starting")
     stop = asyncio.Event()
     task: asyncio.Task[None] | None = None
     if service_bus_config.listen_connection_string() and service_bus_config.queue_name():
+        logger.info("Service Bus queue listener enabled")
         task = asyncio.create_task(poll_queue_forever(stop))
+    else:
+        logger.info(
+            "Service Bus listener disabled (set AZURE_SERVICEBUS_LISTEN_CONNECTION_STRING and queue name to enable)"
+        )
     yield
+    logger.info("Inventory service shutting down")
     stop.set()
     if task:
         task.cancel()
@@ -205,7 +212,7 @@ def update_ingredient(id: uuid.UUID, body: IngredientUpdate) -> Ingredient:
 @app.delete("/ingredients/{id}", response_model=Ingredient)
 def delete_ingredient(id: uuid.UUID) -> Ingredient:
     """Soft-delete (IsActive = 0)."""
-    inv = get_ingredient(id)
+    get_ingredient(id)
     with cursor() as cur:
         cur.execute(
             "UPDATE [Tanya_Inventory].[Ingredients] SET IsActive = 0 WHERE IngredientId = ?",
