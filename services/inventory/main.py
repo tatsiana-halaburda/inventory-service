@@ -10,7 +10,8 @@ from fastapi import FastAPI, HTTPException, Query, status
 from libs import service_bus as service_bus_config
 from libs.db import cursor
 from libs.service_bus_listener import poll_queue_forever, recent_events
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+from services.inventory import domain
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +65,22 @@ class IngredientCreate(BaseModel):
     unit: str
     reorder_level: float = Field(ge=0)
 
+    @field_validator("unit")
+    @classmethod
+    def _validate_unit(cls, v: str) -> str:
+        try:
+            return domain.normalize_unit(v)
+        except ValueError as exc:
+            raise ValueError(str(exc)) from exc
+
+    @field_validator("reorder_level")
+    @classmethod
+    def _validate_reorder_level(cls, v: float) -> float:
+        try:
+            return domain.validate_reorder_level(v)
+        except ValueError as exc:
+            raise ValueError(str(exc)) from exc
+
 
 class IngredientUpdate(BaseModel):
     name: str | None = None
@@ -71,6 +88,26 @@ class IngredientUpdate(BaseModel):
     unit: str | None = None
     reorder_level: float | None = Field(default=None, ge=0)
     is_active: bool | None = None
+
+    @field_validator("unit")
+    @classmethod
+    def _validate_unit(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        try:
+            return domain.normalize_unit(v)
+        except ValueError as exc:
+            raise ValueError(str(exc)) from exc
+
+    @field_validator("reorder_level")
+    @classmethod
+    def _validate_reorder_level(cls, v: float | None) -> float | None:
+        if v is None:
+            return None
+        try:
+            return domain.validate_reorder_level(v)
+        except ValueError as exc:
+            raise ValueError(str(exc)) from exc
 
 
 def _row_to_ingredient(row: Any) -> Ingredient:
@@ -177,6 +214,59 @@ def get_ingredient(id: uuid.UUID) -> Ingredient:
     if not row:
         raise HTTPException(status_code=404, detail="Ingredient not found")
     return _row_to_ingredient(row)
+
+
+class WarehouseQtyOut(BaseModel):
+    warehouse_id: uuid.UUID
+    quantity: float
+
+
+class IngredientStockSummaryOut(BaseModel):
+    ingredient_id: uuid.UUID
+    total_quantity: float
+    reorder_level: float
+    is_below_reorder: bool
+    per_warehouse: list[WarehouseQtyOut]
+
+
+@app.get("/ingredients/{id}/stock-summary", response_model=IngredientStockSummaryOut)
+def ingredient_stock_summary(id: uuid.UUID) -> IngredientStockSummaryOut:
+    ing = get_ingredient(id)
+    try:
+        with cursor() as cur:
+            cur.execute(
+                """
+                SELECT WarehouseId, Quantity
+                FROM [Tanya_Inventory].[Stock]
+                WHERE IngredientId = ?
+                """,
+                str(id),
+            )
+            rows = [
+                domain.WarehouseQuantity(uuid.UUID(str(r.WarehouseId)), float(r.Quantity))
+                for r in cur.fetchall()
+            ]
+    except pyodbc.ProgrammingError as exc:
+        if _programming_schema_gone(exc):
+            raise HTTPException(
+                status_code=503,
+                detail="No tables yet — run sql/01 … sql/05 on this DB, then retry.",
+            ) from exc
+        raise
+    try:
+        summary = domain.aggregate_stock(id, float(ing.reorder_level), rows)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    return IngredientStockSummaryOut(
+        ingredient_id=summary.ingredient_id,
+        total_quantity=summary.total_quantity,
+        reorder_level=summary.reorder_level,
+        is_below_reorder=summary.is_below_reorder,
+        per_warehouse=[
+            WarehouseQtyOut(warehouse_id=w.warehouse_id, quantity=w.quantity) for w in summary.per_warehouse
+        ],
+    )
 
 
 @app.put("/ingredients/{id}", response_model=Ingredient)
