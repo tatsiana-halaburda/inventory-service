@@ -49,7 +49,7 @@ OpenAPI: `http://127.0.0.1:8001/docs`
 ```bash
 pip install -r requirements.txt -r requirements-dev.txt
 ruff check .
-pytest tests/ -q --tb=short
+pytest tests/ -v --tb=short
 ```
 
 - `tests/test_smoke.py` — app wiring / OpenAPI (no DB).
